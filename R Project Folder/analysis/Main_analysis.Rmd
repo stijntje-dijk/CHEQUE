@@ -1,0 +1,571 @@
+---
+title: "R code for application of the Checklist for Health Economic Quality Evaluations (CHEQUE) in a systematic review setting"
+author: "Stijntje Dijk"
+date: "29-11-2023"
+output: html_document
+---
+
+# Notes before running this code:
+This repository was created to accompany the following manuscript "An application of the Checklist for Health Economic Quality Evaluations (CHEQUE) in a systematic review setting"
+
+Stijntje W. Dijk MD MSc1,2, Skander Essafi MD3, Myriam G.M. Hunink MD PhD*1,2,4
+
+1 Department of Epidemiology, Erasmus MC, University Medical Center Rotterdam, The Netherlands 2 Department of Radiology, Erasmus MC, University Medical Center Rotterdam, The Netherlands 3 Erasmus University Rotterdam, Rotterdam, The Netherlands 4 Center for Health Decision Science, Harvard T.H. Chan School of Public Health, Boston, USA
+
+Correspondence: m.hunink@erasmusmc.nl
+
+The manuscript was accepted for publication by Value in Health and will hopefully be shared online shortly. This repository contains all code that was written to create the traffic light plots and tables part of the paper. We used robvis package as inspiration for creating these plots based on the more common Risk Of Bias plots used in medical literature
+
+All are invited to use and modify the provided code for their own project, though we appreciate a citation of our paper if you do.
+
+This code loads and saves files under the assumption that it is opened within the context of the file folder. Please download the full R studio folder, or adjust the directories so that the appropriate files are loaded or saved in the correct location.
+We have included the datafile for our study; Should the code be reused in a new context, please either use the same structure of our excel sheet, or adjust the column names in-code
+To view the various sections of the code, use the "Outline" function in R studio to navigate through the code
+We recognize that some sections of the code below can be written out in a more efficient manner. As this study is however not funded and coded in our free time, we prioritized that the code achieved its goals, and invite future users to optimize it further if they deem necessary
+
+
+# Knitting setup
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = "./") # set working directory to the root directory rather than another sub-folder where the RMarkdown file is saved
+```
+
+# Clean global environment
+```{r, eval = FALSE}
+# Clean list
+rm(list = ls())
+```
+
+# Load required packages
+```{r, eval = TRUE, echo = FALSE, warning = FALSE, message = FALSE}
+# If packages are not yet installed, do so first using the install.packages() function
+library(ggplot2)
+library(tidyverse)
+library(readxl)
+library(writexl)
+library(dplyr)
+library(gridExtra)
+library(ggrepel)
+library(cowplot)
+```
+
+# Load data
+```{r}
+# Select pathway to saved dataset containing the CHEQUE data
+df_CHEQUE_full <- read_excel("../data/SR_Data.xlsx")
+
+# Save full attribute names
+full_names <- colnames(df_CHEQUE_full)
+
+# Create copy and substitute full names for shortened attribute names
+df_CHEQUE  <- df_CHEQUE_full
+colnames(df_CHEQUE) <- sub("^([MR]\\d+).*", "\\1", colnames(df_CHEQUE_full))
+
+# Remove the row for scoring weights as this contains no information
+df_CHEQUE <- df_CHEQUE[!grepl("Scoring_weights", df_CHEQUE$Attribute), ]
+
+# Remove the empty column that is between the two assessments
+# Identify the column index between M24 and R1
+col_index_to_remove <- which(colnames(df_CHEQUE) %in% c("M24", "R1"))[1]
+
+# Remove the identified column
+df_CHEQUE <- df_CHEQUE[, -(col_index_to_remove +1)]
+
+# Print table
+df_CHEQUE
+```
+
+# Setup color scheme
+```{r}
+# Choose the colors used in the code. The default colors chosen below are intended as colorblind friendly choices
+color_full     <- "#009E73" # Assigned to "yes" scored items (full score is awarded)
+color_somewhat <- "#F0E442" # Assigned to "somewhat" scored items
+color_no       <- "#CC79A7" # Assigned to "no" scored items
+color_na       <- "#D3D3D3" # Assigned to "N/A" scored itmes
+```
+
+
+# Select domains
+```{r}
+domain_vector_list <- unlist(df_CHEQUE[df_CHEQUE$Attribute == "Domain", -1])
+domain_vector      <- unique(unlist(domain_vector_list))
+domain_vector      <- domain_vector[!is.na(domain_vector)]
+domain_vector
+```
+
+# Plot trafficlight per-study score 
+The traffic-light and summary score-plots are made to resemble the Risk Of Bias tool plots, such as created through the "robvis" R package; https://www.riskofbias.info/welcome/robvis-visualization-tool
+```{r}
+# Function to create a custom traffic light plot for "Methods" or "Reporting"
+custom_traffic_light_plot <- function(data, psize, overall) {
+
+  # Split data into "Methods" and "Reporting"
+  df_methods <- data %>% select(Attribute, starts_with("M")) %>% filter(!Attribute %in% c("Scoring_weight", "Rounded_importance_score", "Quality_assessment_section", "Domain"))
+  df_reporting <- data %>% select(Attribute, starts_with("R")) %>% filter(!Attribute %in% c("Scoring_weight", "Rounded_importance_score", "Quality_assessment_section", "Domain"))
+
+  # Melt the data frames for ggplot2
+  df_melted_methods <- reshape2::melt(df_methods, id.vars = "Attribute", variable.name = "Study", value.name = "Score")
+  df_melted_reporting <- reshape2::melt(df_reporting, id.vars = "Attribute", variable.name = "Study", value.name = "Score")
+
+  # Define color scale based on the score
+  color_scale <- scale_fill_manual(
+    values = c("1" = color_full, "0.5" = color_somewhat, "0" = color_no, "N/A" = color_na),
+    labels = c("1" = "yes", "0.5" = "somewhat", "0" = "no", "N/A" = "N/A")
+  )
+
+  # Sort attributes
+  df_melted_methods$Attribute <- factor(df_melted_methods$Attribute, levels = unique(df_melted_methods$Attribute))
+  df_melted_reporting$Attribute <- factor(df_melted_reporting$Attribute, levels = unique(df_melted_reporting$Attribute))
+
+  # Order studies anti-alphabetically 
+  df_melted_methods$Study <- factor(df_melted_methods$Study, levels = (sort(unique(df_melted_methods$Study))))
+  df_melted_reporting$Study <- factor(df_melted_reporting$Study, levels = (sort(unique(df_melted_reporting$Study))))
+
+  # Plot the figures side by side
+  traffic_light_plot_methods <- ggplot(df_melted_methods, aes(x = Study, y = Attribute, fill = Score)) +
+    geom_tile(color = "white", size = 1.5) +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1),
+          axis.text.y = element_text(angle = 0, hjust = 1),
+          axis.title.x = element_blank(),  # Remove x-axis label
+          axis.title.y = element_blank(),  # Remove y-axis label
+          legend.position = "bottom",
+          legend.title = element_blank(),
+          legend.text = element_text(size = 10),
+          panel.grid = element_blank()) +
+    labs(title = "CHEQUE Quality assessment - Individual study scores",
+         subtitle = "Methods",  # Update subtitle here
+         fill = "Score") +
+    color_scale
+
+  traffic_light_plot_reporting <- ggplot(df_melted_reporting, aes(x = Study, y = Attribute, fill = Score)) +
+    geom_tile(color = "white", size = 1.5) +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1),
+          axis.text.y = element_text(angle = 0, hjust = 1),
+          axis.title.x = element_blank(),  # Remove x-axis label
+          axis.title.y = element_blank(),  # Remove y-axis label
+          legend.position = "bottom",
+          legend.title = element_blank(),
+          legend.text = element_text(size = 10),
+          panel.grid = element_blank()) +
+    labs(title = "",
+         subtitle = "Reporting",  # Update subtitle here
+         fill = "Score") +
+    color_scale
+
+  # Combine the two plots side by side
+  combined_plot <- grid.arrange(traffic_light_plot_methods, traffic_light_plot_reporting, ncol = 2)
+
+  # Save the plot to "../figures" folder
+  ggsave(file.path("..", "figures", "traffic_light_plot.png"), combined_plot, width = 14, height = 6, units = "in")
+
+  # Return the grid arrangement
+  return(combined_plot)
+}
+
+# Run traffic light function "Methods" and "Reporting"
+custom_traffic_light_plot(df_CHEQUE, psize = 12, overall = TRUE)
+```
+
+
+# Generate legend plot
+```{r}
+# Create a data frame for plotting
+legend_data <- data.frame(full_names = full_names)
+
+# Reverse the order of full_names
+full_names_rev <- rev(full_names)
+
+# Create a data frame for plotting
+legend_data <- data.frame(full_names = full_names_rev)
+
+# Create a data frame for names starting with 'R'
+data_R <- data.frame(full_names = full_names_rev[grep("^R", full_names_rev)])
+data_M <- data.frame(full_names = full_names_rev[grep("^M", full_names_rev)])
+
+# Plot the legend with names starting with 'M'
+legend_plot_M <- ggplot(data_M, aes(x = 0, y = seq_along(full_names), label = full_names)) +
+  geom_text(size = 4, color = "black", hjust = 0) +
+  theme_void() +
+  theme(legend.position = "none",
+        plot.margin = margin(0, 0, 0, 0, "cm"),
+        panel.spacing = unit(0, "lines"),
+        plot.background = element_rect(fill = "white", color = "black"),
+        text = element_text(color = "black", margin = margin(0, 0, 0, 0, "cm"), hjust = 0))
+
+# Save the legend as an image file for names starting with 'M'
+ggsave("../figures/legend_image_M.png", plot = legend_plot_M, width = 25, height = 6, dpi = 300)
+
+# Plot the legend with names starting with 'R'
+legend_plot_R <- ggplot(data_R, aes(x = 0, y = seq_along(full_names), label = full_names)) +
+  geom_text(size = 4, color = "black", hjust = 0) +
+  theme_void() +
+  theme(legend.position = "none",
+        plot.margin = margin(0, 0, 0, 0, "cm"),
+        panel.spacing = unit(0, "lines"),
+        plot.background = element_rect(fill = "white", color = "black"),
+        text = element_text(color = "black", margin = margin(0, 0, 0, 0, "cm"), hjust = 0))
+
+# Save the legend as an image file for names starting with 'R'
+ggsave("../figures/legend_image_R.png", plot = legend_plot_R, width = 25, height = 6, dpi = 300)
+```
+
+# Generate summary plot
+## Get frequency of scores for each study 
+```{r}
+# Exclude unnecessary rows
+count_df_study <- df_CHEQUE %>%
+  filter(!Attribute %in% c("Quality_assessment_section", "Domain", "Rounded_importance_score"))
+
+# Melt the data frame for counting
+df_count_melted <- reshape2::melt(count_df_study, id.vars = "Attribute", variable.name = "Study", value.name = "Score")
+
+# Count the frequency of each score for each attribute
+count_df_study <- df_count_melted %>%
+  group_by(Attribute, Score) %>%
+  summarise(Frequency = n())
+
+# Pivot the data frame for better visualization
+count_df_study <- pivot_wider(count_df_study, names_from = Score, values_from = Frequency, values_fill = 0)
+count_df_study
+```
+
+## Get frequency of scores for each attribute
+```{r}
+# Create df_count with only the relevant rows
+df_count <- df_CHEQUE %>%
+  filter(!Attribute %in% c("Quality_assessment_section", "Domain", "Rounded_importance_score"))
+
+# Get all M and R column names
+m_columns <- grep("^M\\d+$", names(df_count), value = TRUE)
+r_columns <- grep("^R\\d+$", names(df_count), value = TRUE)
+
+# Function to count and format data
+count_and_format <- function(column_name) {
+  count_result <- table(df_count[[column_name]])
+  count_result <- as.data.frame(count_result)
+  colnames(count_result) <- c("Score", column_name)
+  return(count_result)
+}
+
+# Get all unique "Score" values
+all_scores <- unique(unlist(lapply(c(m_columns, r_columns), function(column_name) df_count[[column_name]])))
+
+# Apply the function to M columns
+m_counts_list <- lapply(m_columns, count_and_format)
+# Apply the function to R columns
+r_counts_list <- lapply(r_columns, count_and_format)
+
+# Function to merge with all_scores
+merge_with_all_scores <- function(count_df) {
+  result <- merge(data.frame(Score = all_scores), count_df, all.x = TRUE)
+  result[is.na(result)] <- 0  # Replace NA with 0
+  return(result)
+}
+
+# Apply the merging function to M counts
+m_counts_list <- lapply(m_counts_list, merge_with_all_scores)
+# Apply the merging function to R counts
+r_counts_list <- lapply(r_counts_list, merge_with_all_scores)
+
+# Combine the results into a single data frame
+m_counts_df <- do.call(cbind, m_counts_list)
+r_counts_df <- do.call(cbind, r_counts_list)
+
+# Print the results
+print(m_counts_df)
+print(r_counts_df)
+
+# Remove all columns named "Score" except the first one
+m_counts_df <- m_counts_df[, !duplicated(colnames(m_counts_df))]
+r_counts_df <- r_counts_df[, !duplicated(colnames(r_counts_df))]
+
+m_counts_df
+r_counts_df
+```
+
+## Generate summary chart
+```{r}
+# Function to create horizontal stacked percentage bar chart for all attributes
+create_stacked_percentage_chart <- function(df_counts, attribute_prefix, title, subtitle) {
+  attribute_order <- paste0(attribute_prefix, 24:1)
+  
+  df_counts %>%
+    pivot_longer(cols = starts_with(attribute_prefix), names_to = "Attribute", values_to = "value") %>%
+    group_by(Attribute, Score) %>%
+    summarise(Count = sum(value)) %>%
+    group_by(Attribute) %>%
+    mutate(Percentage = Count / sum(Count) * 100) %>%
+    mutate(Attribute = factor(Attribute, levels = attribute_order)) %>%
+    ggplot(aes(x = Percentage, y = Attribute, fill = Score)) +
+    geom_bar(stat = "identity") +
+    scale_fill_manual(values = c(
+      "0"   = color_no,
+      "0.5" = color_somewhat,
+      "1"   = color_full,
+      "N/A" = color_na
+    )) +
+    labs(x = "Percentage", y = "Attribute", fill = "Score", title = title, subtitle = subtitle) +
+    theme_minimal() +
+    theme(legend.position = "bottom")
+}
+
+# Create horizontal stacked percentage bar chart for all M attributes with subtitle "Methods"
+m_chart <- create_stacked_percentage_chart(m_counts_df, attribute_prefix = "M", title = "CHEQUE Quality Assessment - Summary", subtitle = "Methods")
+
+# Create horizontal stacked percentage bar chart for all R attributes with subtitle "Reporting"
+r_chart <- create_stacked_percentage_chart(r_counts_df, attribute_prefix = "R", title = "",subtitle = "Reporting")
+
+# Combine plots for M and R attributes
+combined_chart <- cowplot::plot_grid(m_chart, r_chart, ncol = 2)
+
+# Save the combined chart to file
+ggsave(file.path("..", "figures", "traffic_light_summary_plot.png"), combined_chart, width = 14, height = 6, units = "in", bg = "white")
+
+# Print the combined plot
+print(combined_chart)
+```
+
+# Calculate weighted scores for each study
+```{r}
+# Change Attribute to rowname
+df_CHEQUE_weightedtotal <- df_CHEQUE %>% 
+  column_to_rownames(var = "Attribute")
+
+# Change to numeric
+# Identify rows to keep as they are
+rows_to_keep <- c("Quality_assessment_section", "Domain")
+
+# Identify rows to convert to numeric
+# Note, this method is chosen so that study names can be adjusted
+rows_to_convert <- setdiff(rownames(df_CHEQUE_weightedtotal), rows_to_keep)
+
+# Convert rows to numeric
+df_CHEQUE_weightedtotal[rows_to_convert, ] <- lapply(df_CHEQUE_weightedtotal[rows_to_convert, ], as.numeric)
+
+df_CHEQUE_weightedtotal
+```
+
+# Calculate weighted scores for Reporting, Methods and Total
+```{r}
+# Create subsets of df_CHEQUE to create three sets of score tables
+## df_CHEQUE_M for only method items
+selected_columns_M <- grep("^M", colnames(df_CHEQUE), value = TRUE)
+df_CHEQUE_M <- df_CHEQUE %>%
+  select(Attribute, all_of(selected_columns_M))
+## df_CHEQUE_R for only reporting items
+selected_columns_R <- grep("^R", colnames(df_CHEQUE), value = TRUE)
+df_CHEQUE_R <- df_CHEQUE %>%
+  select(Attribute, all_of(selected_columns_R))
+## df_CHEQUE_T for full set
+df_CHEQUE_T <- df_CHEQUE
+
+calculate_scores <- function(df_CHEQUE_weightedtotal) {
+ # Change Attribute to rowname
+df_CHEQUE_weightedtotal <- df_CHEQUE_weightedtotal %>% 
+  column_to_rownames(var = "Attribute")
+
+# Change to numeric
+# Identify rows to keep as they are
+rows_to_keep <- c("Quality_assessment_section", "Domain")
+
+# Identify rows to convert to numeric (studies)
+rows_to_convert <- setdiff(rownames(df_CHEQUE_weightedtotal), rows_to_keep)
+
+# Convert rows to numeric
+df_CHEQUE_weightedtotal[rows_to_convert, ] <- apply(df_CHEQUE_weightedtotal[rows_to_convert, ], 2, as.numeric)
+
+# Extract studies dynamically
+studies <- rownames(df_CHEQUE_weightedtotal)[!(rownames(df_CHEQUE_weightedtotal) %in% c("Rounded_importance_score", rows_to_keep))]
+
+# Extract items dynamically
+items <- colnames(df_CHEQUE_weightedtotal)[!(colnames(df_CHEQUE_weightedtotal) %in% "Attribute")]
+
+# Create dataframes for NA replaced with 1 and 0
+df_CHEQUE_weightedtotal_NA1 <- df_CHEQUE_weightedtotal
+df_CHEQUE_weightedtotal_NA0 <- df_CHEQUE_weightedtotal
+
+# Create a dataframe to store calculated scores for each study
+df_calculated_scores <- data.frame(Study = studies, Score_NA1 = numeric(length(studies)), Score_NA0 = numeric(length(studies)))
+
+# Loop through studies and items to calculate weighted scores
+for (study in studies) {
+  # Replace NA with 1 in df_CHEQUE_weightedtotal_NA1
+  df_CHEQUE_weightedtotal_NA1[study, items][is.na(df_CHEQUE_weightedtotal_NA1[study, items])] <- 1
+  
+  # Replace NA with 0 in df_CHEQUE_weightedtotal_NA0
+  df_CHEQUE_weightedtotal_NA0[study, items][is.na(df_CHEQUE_weightedtotal_NA0[study, items])] <- 0
+  
+  df_CHEQUE_weightedtotal_NA1[study, items] <- as.numeric(df_CHEQUE_weightedtotal_NA1[study, items])
+  
+  # Extract the importance scores for the study
+  importance_scores <- df_CHEQUE_weightedtotal["Rounded_importance_score", items]
+  
+  # Multiply each item score by its importance score
+  weighted_scores_NA1 <- unlist(as.numeric(df_CHEQUE_weightedtotal_NA1[study, items])) * unlist(as.numeric(importance_scores))
+  
+  weighted_scores_NA0 <- unlist(as.numeric(df_CHEQUE_weightedtotal_NA0[study, items])) * unlist(as.numeric(importance_scores))
+  
+  # Save the calculated scores for each study
+  df_calculated_scores[df_calculated_scores$Study == study, "Score_NA1"] <- sum(weighted_scores_NA1, na.rm = TRUE)
+  df_calculated_scores[df_calculated_scores$Study == study, "Score_NA0"] <- sum(weighted_scores_NA0, na.rm = TRUE)
+  
+  # Create a third category for NA scores
+  max_score <- sum(unlist(as.numeric(df_CHEQUE_weightedtotal["Rounded_importance_score", items])))
+  max_score_NA <- max_score - (sum(weighted_scores_NA1, na.rm = TRUE)-(sum(weighted_scores_NA0, na.rm = TRUE)))
+  
+  # Save the max_score for each study
+  df_calculated_scores[df_calculated_scores$Study == study, "Max_Score_ignore_NA"] <- max_score_NA
+}
+
+df_calculated_scores
+
+# Add max score
+max_score <- sum(unlist(as.numeric((df_CHEQUE_weightedtotal["Rounded_importance_score", items]))))
+df_calculated_scores$Max <- max_score
+
+# Round results by 2 decimals
+# Round percentages to 2 decimals
+df_calculated_scores$'% Max NA=1' <- round((df_calculated_scores$Score_NA1 / df_calculated_scores$Max) * 100, 2)
+df_calculated_scores$'% Max NA=0' <- round((df_calculated_scores$Score_NA0 / df_calculated_scores$Max) * 100, 2)
+df_calculated_scores$'% Max NA=ignore' <- round((df_calculated_scores$Score_NA0 / df_calculated_scores$Max_Score) * 100, 2)
+
+  return(df_calculated_scores)
+}
+
+# Apply function
+df_calculated_scores_M <- calculate_scores(df_CHEQUE_M)
+df_calculated_scores_R <- calculate_scores(df_CHEQUE_R)
+df_calculated_scores_T <- calculate_scores(df_CHEQUE_T)
+
+df_calculated_scores_M 
+df_calculated_scores_R
+df_calculated_scores_T
+```
+
+# Rename and save weighted score tables
+```{r}
+rename_and_save_table <- function(df_calculated_scores_print, version) {
+  # Rename columns
+  df_calculated_scores_print_renamed <- df_calculated_scores_print %>%
+    select(-`% Max NA=0`) %>%
+    rename(
+      "NA = 1" = Score_NA1,
+      "NA = NA" = Score_NA0,
+      "Max Score" = Max,
+      "Max Score NA = NA" = Max_Score_ignore_NA,
+      "% of Max Score" = `% Max NA=1`,
+      "% of Max Score NA" = `% Max NA=ignore`
+    )
+  df_calculated_scores_print_renamed <- df_calculated_scores_print_renamed %>%
+    select(Study, "NA = 1", "Max Score", "% of Max Score", "NA = NA", "Max Score NA = NA", "% of Max Score NA")
+  
+  # Save the table as a PNG image
+  png_file_name <- paste0("../figures/df_calculated_scores_", version, ".png")
+  png(png_file_name, width = 800, height = 600)
+  grid.arrange(tableGrob(df_calculated_scores_print_renamed, rows = NULL), ncol = 1)
+  dev.off()
+  
+  cat("Table saved as:", png_file_name, "\n")
+  
+  # Save the table as an Excel file
+  excel_file_name <- paste0("../figures/df_calculated_scores_", version, ".xlsx")
+  write_xlsx(df_calculated_scores_print_renamed, excel_file_name)
+  
+  cat("Excel file saved as:", excel_file_name, "\n")
+}
+
+# Rename and save the calculated scores
+rename_and_save_table(df_calculated_scores_print=df_calculated_scores_M, "M")
+rename_and_save_table(df_calculated_scores_print=df_calculated_scores_R, "R")
+rename_and_save_table(df_calculated_scores_print=df_calculated_scores_T, "T")
+
+```
+
+# Create a correlation plot
+```{r}
+# Extract the relevant columns for the correlation plot
+column_name_1 <- '% Max NA=1'
+column_name_2 <- '% Max NA=ignore'
+scores_M_1 <- df_calculated_scores_M[[column_name_1]]
+scores_R_1 <- df_calculated_scores_R[[column_name_1]]
+scores_M_2 <- df_calculated_scores_M[[column_name_2]]
+scores_R_2 <- df_calculated_scores_R[[column_name_2]]
+study_labels_1 <- df_calculated_scores_M$Study
+study_labels_2 <- df_calculated_scores_R$Study
+
+# Function to format p-values for the legend
+format_p_value <- function(p_value) {
+  if (p_value < 0.001) {
+    return("<0.001")
+  } else if (p_value < 0.01) {
+    return("<0.01")
+  } else {
+    return(sprintf("%.3f", p_value))
+  }
+}
+
+# Create a scatter plot with correlation coefficient and p-value inside the plot
+plot_1 <- ggplot(data = data.frame(scores_M_1, scores_R_1, Study = study_labels_1), aes(x = scores_M_1, y = scores_R_1)) +
+  geom_point(size = 1.1) +
+  geom_smooth(method = "lm", formula = y ~ x, se = FALSE, color = color_full, fullrange = TRUE) +
+  geom_label_repel(aes(label = Study), size = 3, box.padding = 0.5, max.overlaps = Inf, alpha = 0.8, 
+                   fill = alpha("white", 0.7), color = "black", 
+                   segment.color = "black", segment.linetype = "dotted", segment.alpha = 0.5) +
+  labs(subtitle = "N/A = 1",
+       x = "Absolute scores for Methods (M)",
+       y = "Absolute scores for Reporting (R)",
+       caption = sprintf("Correlation Coefficient: %.3f, p-value: %s", 
+                         cor.test(scores_M_1, scores_R_1)$estimate, 
+                         format_p_value(cor.test(scores_M_1, scores_R_1)$p.value))) +
+  ylim(0, 100) + xlim(0, 100) 
+
+plot_2 <- ggplot(data = data.frame(scores_M_2, scores_R_2, Study = study_labels_2), aes(x = scores_M_2, y = scores_R_2)) +
+  geom_point(size = 1.1) +
+  geom_smooth(method = "lm", formula = y ~ x, se = FALSE, color = color_no, fullrange = TRUE) +
+  geom_label_repel(aes(label = Study), size = 3, box.padding = 0.5, max.overlaps = Inf, alpha = 0.8, 
+                   fill = alpha("white", 0.7), color = "black", 
+                   segment.color = "black", segment.linetype = "dotted", segment.alpha = 0.5) +
+  labs(subtitle = "N/A = N/A",
+       x = "% of max scores for Methods (M)",
+       y = "% of max scores for Reporting (R)",
+       caption = sprintf("Correlation Coefficient: %.3f, p-value: %s", 
+                         cor.test(scores_M_2, scores_R_2)$estimate, 
+                         format_p_value(cor.test(scores_M_2, scores_R_2)$p.value))) +
+  ylim(0, 100) + xlim(0, 100) 
+
+# Extract the relevant columns for correlation
+column_name_1 <- 'Score_NA1'
+column_name_2 <- 'Score_NA0'
+scores_M_3 <- df_calculated_scores_M[[column_name_2]]  # Corrected column_name_1
+scores_R_3 <- df_calculated_scores_R[[column_name_2]]  # Corrected column_name_1
+study_labels_3 <- df_calculated_scores_M$Study         # Corrected study_labels_3
+
+plot_3 <- ggplot(data = data.frame(scores_M_3, scores_R_3, Study = study_labels_3), aes(x = scores_M_3, y = scores_R_3)) +
+  geom_point(size = 1.1) +
+  geom_smooth(method = "lm", formula = y ~ x, se = FALSE, color = color_somewhat, fullrange = TRUE) +
+  geom_label_repel(aes(label = Study), size = 3, box.padding = 0.5, max.overlaps = Inf, alpha = 0.8, 
+                   fill = alpha("white", 0.7), color = "black", 
+                   segment.color = "black", segment.linetype = "dotted", segment.alpha = 0.5) +
+  labs(subtitle = "N/A = 1",
+       x = "Absolute scores for Methods (M)",
+       y = "Absolute scores for Reporting (R)",
+       caption = sprintf("Correlation Coefficient: %.3f, p-value: %s", 
+                         cor.test(scores_M_3, scores_R_3)$estimate, 
+                         format_p_value(cor.test(scores_M_3, scores_R_3)$p.value))) +
+  ylim(0, 100) + xlim(0, 100) 
+
+
+# Combine the two plots using cowplot
+overall_plot <- plot_grid(plot_1, plot_3, plot_2, labels = c("", ""), ncol = 3)
+
+# Display the overall plot
+print(overall_plot)
+
+# Save the overall plot
+ggsave("../figures/correlationplot_percentage_and_absolute_scores.png", overall_plot, width = 15, height = 5)
+```
+
+
+
