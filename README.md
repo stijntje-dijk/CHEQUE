@@ -10,10 +10,14 @@ Stijntje W. Dijk MD MSc1,2, Skander Essafi MD3, Myriam G.M. Hunink MD PhD*1,2,4
 
 Correspondence: m.hunink@erasmusmc.nl 
 
-The manuscript was accepted for publication by Value in Health and will hopefully be shared online shortly.
+The manuscript was published in Value in Health in 2024 and is available from: https://www.sciencedirect.com/science/article/abs/pii/S1098301524067640 
 This repository contains all code that was written to create the traffic light plots and tables part of the paper. We used _robvis_ package as inspiration for creating these plots based on the more common Risk Of Bias plots used in medical literature
 
 All are invited to use and modify the provided code for their own project, though we appreciate a citation of our paper if you do.
 
 With best wishes,
-Stijntje Dijk
+Stijntje 
+
+
+Citation:
+_Dijk, Stijntje W., Skander Essafi, and Myriam GM Hunink. "An application of the Checklist for Health Economic Quality Evaluations (CHEQUE) in a systematic review setting." Value in Health (2024)._
